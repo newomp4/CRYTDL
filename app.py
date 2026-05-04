@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shutil
+import subprocess
 import threading
 import time
 import urllib.request
@@ -539,6 +541,62 @@ def api_file(job_id: str):
 @app.route("/api/history")
 def api_history():
     return jsonify(load_history())
+
+
+def _resolve_history_path(entry_id: str) -> Path | None:
+    for it in load_history():
+        if it["id"] == entry_id:
+            p = DOWNLOADS / it["filename"]
+            if p.exists():
+                return p
+            return None
+    return None
+
+
+@app.route("/api/history/<entry_id>/file")
+def api_history_file(entry_id: str):
+    p = _resolve_history_path(entry_id)
+    if not p:
+        return jsonify({"error": "not found"}), 404
+    return send_file(p, as_attachment=True, download_name=p.name)
+
+
+@app.route("/api/history/<entry_id>/open", methods=["POST"])
+def api_history_open(entry_id: str):
+    """Open the file in the OS default application."""
+    p = _resolve_history_path(entry_id)
+    if not p:
+        return jsonify({"error": "not found"}), 404
+    try:
+        sysname = platform.system()
+        if sysname == "Darwin":
+            subprocess.run(["open", str(p)], check=False)
+        elif sysname == "Windows":
+            os.startfile(str(p))  # type: ignore[attr-defined]
+        else:
+            subprocess.run(["xdg-open", str(p)], check=False)
+        return jsonify({"ok": True})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/history/<entry_id>/reveal", methods=["POST"])
+def api_history_reveal(entry_id: str):
+    """Reveal the file in Finder/Explorer/file manager."""
+    p = _resolve_history_path(entry_id)
+    if not p:
+        return jsonify({"error": "not found"}), 404
+    try:
+        sysname = platform.system()
+        if sysname == "Darwin":
+            subprocess.run(["open", "-R", str(p)], check=False)
+        elif sysname == "Windows":
+            subprocess.run(["explorer", "/select,", str(p)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(p.parent)], check=False)
+        return jsonify({"ok": True})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/history/<entry_id>", methods=["DELETE"])
