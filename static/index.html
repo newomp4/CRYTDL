@@ -30,7 +30,7 @@
       </header>
 
       <section class="hero">
-        <h1 class="hero-title">Download anything from YouTube.</h1>
+        <h1 class="hero-title">Download anything from YouTube or Spotify.</h1>
         <p class="hero-sub">Paste a link. Pick a format. Get the file.</p>
       </section>
 
@@ -42,7 +42,7 @@
           <input
             id="urlInput"
             type="url"
-            placeholder="https://youtube.com/watch?v=..."
+            placeholder="youtube.com/watch?v=… or open.spotify.com/track/…"
             autocomplete="off"
             spellcheck="false"
           />
@@ -55,6 +55,12 @@
             <div class="preview-title" id="previewTitle"></div>
             <div class="preview-sub" id="previewSub"></div>
           </div>
+          <span class="source-pill" id="previewSource" hidden></span>
+        </div>
+
+        <div class="notice" id="spotifyNotice" hidden>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v5"/><circle cx="12" cy="16.5" r=".8" fill="currentColor"/></svg>
+          <span>Spotify uses DRM, so the audio is sourced from YouTube and tagged with Spotify metadata.</span>
         </div>
 
         <div class="row">

@@ -276,6 +276,40 @@ button { font-family: inherit; }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+.source-pill {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  animation: slide-down var(--t-base);
+}
+.notice svg { flex-shrink: 0; margin-top: 1px; }
+
+.seg-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ==========================================================================
    Format / quality row
    ========================================================================== */

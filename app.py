@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import threading
 import time
+import urllib.request
 import uuid
 import webbrowser
 from pathlib import Path
@@ -28,6 +30,8 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 import yt_dlp
+
+import spotify
 
 
 ROOT = Path(__file__).resolve().parent
@@ -67,11 +71,13 @@ def update_job(job_id: str, **fields: Any) -> None:
 
 def new_job(url: str, fmt: str) -> str:
     job_id = uuid.uuid4().hex[:12]
+    source = "spotify" if spotify.is_spotify_url(url) else "youtube"
     with jobs_lock:
         jobs[job_id] = {
             "id": job_id,
             "url": url,
-            "format": fmt,
+            "format": "mp3" if source == "spotify" else fmt,
+            "source": source,
             "status": "queued",
             "percent": 0.0,
             "speed": "",
@@ -231,6 +237,14 @@ def _human_eta(secs: float | None) -> str:
 
 
 def run_download(job_id: str, settings: dict[str, Any]) -> None:
+    """Dispatch to the right pipeline based on URL source."""
+    if spotify.is_spotify_url(settings["url"]):
+        run_spotify_download(job_id, settings)
+    else:
+        run_youtube_download(job_id, settings)
+
+
+def run_youtube_download(job_id: str, settings: dict[str, Any]) -> None:
     url = settings["url"]
     opts = build_ydl_opts(job_id, settings)
 
@@ -275,6 +289,7 @@ def run_download(job_id: str, settings: dict[str, Any]) -> None:
                 "thumbnail": info.get("thumbnail", ""),
                 "filename": final.name,
                 "format": settings.get("format"),
+                "source": "youtube",
                 "url": url,
                 "size_bytes": final.stat().st_size if final.exists() else 0,
                 "completed_at": time.time(),
@@ -282,6 +297,143 @@ def run_download(job_id: str, settings: dict[str, Any]) -> None:
 
     except Exception as e:  # noqa: BLE001 — we want to surface anything to UI
         update_job(job_id, status="error", error=str(e))
+
+
+def run_spotify_download(job_id: str, settings: dict[str, Any]) -> None:
+    """Spotify pipeline: scrape metadata, search YouTube, download MP3, retag."""
+    url = settings["url"]
+
+    # 1. Pull Spotify metadata.
+    try:
+        update_job(job_id, status="searching", percent=2.0)
+        meta = spotify.fetch_track(url)
+        update_job(
+            job_id,
+            title=meta["title"],
+            uploader=meta.get("artist") or "",
+            thumbnail=meta.get("cover_url") or "",
+        )
+    except Exception as e:  # noqa: BLE001
+        update_job(job_id, status="error", error=f"Spotify lookup failed: {e}")
+        return
+
+    # 2. Build YouTube search and download as MP3 using the existing pipeline.
+    yt_settings = {
+        **settings,
+        "format": "mp3",
+        "url": f"ytsearch1:{spotify.search_query(meta)}",
+        # Don't let yt-dlp tag the file or embed thumbnails — we strip
+        # everything and re-tag with Spotify's data afterward.
+        "embed_thumbnail": False,
+        "embed_metadata": False,
+        "embed_subs": False,
+    }
+    opts = build_ydl_opts(job_id, yt_settings)
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(yt_settings["url"], download=True)
+            if "entries" in info and info["entries"]:
+                info = info["entries"][0]
+
+            base = ydl.prepare_filename(info)
+            mp3_path = Path(base).with_suffix(".mp3")
+            if not mp3_path.exists():
+                stem = Path(base).stem
+                for p in DOWNLOADS.iterdir():
+                    if p.stem == stem and p.suffix.lower() == ".mp3":
+                        mp3_path = p
+                        break
+
+        # 3. Retag with Spotify metadata + cover.
+        update_job(job_id, status="tagging", percent=99.5)
+        cover_bytes = _fetch_cover(meta.get("cover_url"))
+        _tag_mp3_with_spotify(mp3_path, meta, cover_bytes)
+
+        # 4. Rename to "Artist - Title.mp3" so it's pretty in Finder.
+        artist = meta.get("artist") or "Unknown Artist"
+        title = meta["title"]
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", f"{artist} - {title}")[:200]
+        new_path = mp3_path.with_name(f"{safe}.mp3")
+        if new_path != mp3_path and not new_path.exists():
+            mp3_path.rename(new_path)
+            mp3_path = new_path
+
+        update_job(
+            job_id,
+            status="completed",
+            percent=100.0,
+            filename=mp3_path.name,
+        )
+
+        append_history({
+            "id": job_id,
+            "title": f"{artist} — {title}",
+            "uploader": artist,
+            "thumbnail": meta.get("cover_url", ""),
+            "filename": mp3_path.name,
+            "format": "mp3",
+            "source": "spotify",
+            "url": url,
+            "size_bytes": mp3_path.stat().st_size if mp3_path.exists() else 0,
+            "completed_at": time.time(),
+        })
+    except Exception as e:  # noqa: BLE001
+        update_job(job_id, status="error", error=str(e))
+
+
+def _fetch_cover(url: str | None) -> bytes | None:
+    if not url:
+        return None
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": spotify.UA})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.read()
+    except Exception:
+        return None
+
+
+def _tag_mp3_with_spotify(
+    filepath: Path,
+    meta: dict[str, Any],
+    cover_bytes: bytes | None,
+) -> None:
+    """Overwrite ID3 tags on an MP3 with Spotify-sourced metadata."""
+    from mutagen.id3 import (  # imported lazily so app boots even if missing
+        ID3,
+        ID3NoHeaderError,
+        TIT2,
+        TPE1,
+        TALB,
+        TDRC,
+        APIC,
+    )
+
+    try:
+        audio = ID3(filepath)
+        audio.delete()  # wipe any tags yt-dlp/ffmpeg left behind
+    except ID3NoHeaderError:
+        pass
+    audio = ID3()
+
+    if meta.get("title"):
+        audio.add(TIT2(encoding=3, text=meta["title"]))
+    if meta.get("artist"):
+        audio.add(TPE1(encoding=3, text=meta["artist"]))
+    if meta.get("album"):
+        audio.add(TALB(encoding=3, text=meta["album"]))
+    if meta.get("year"):
+        audio.add(TDRC(encoding=3, text=str(meta["year"])))
+    if cover_bytes:
+        audio.add(APIC(
+            encoding=3,
+            mime="image/jpeg",
+            type=3,  # cover (front)
+            desc="Cover",
+            data=cover_bytes,
+        ))
+
+    audio.save(filepath)
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +451,24 @@ def api_info():
     url = (data.get("url") or "").strip()
     if not url:
         return jsonify({"error": "missing url"}), 400
+
+    # Spotify path — quick scrape of the SSR page.
+    if spotify.is_spotify_url(url):
+        try:
+            m = spotify.fetch_track(url)
+        except Exception as e:  # noqa: BLE001
+            return jsonify({"error": str(e)}), 400
+        return jsonify({
+            "source": "spotify",
+            "title": m["title"],
+            "uploader": m.get("artist"),
+            "album": m.get("album"),
+            "year": m.get("year"),
+            "duration": m.get("duration"),
+            "thumbnail": m.get("cover_url"),
+        })
+
+    # YouTube (and anything else yt-dlp recognizes) path.
     try:
         with yt_dlp.YoutubeDL({
             "quiet": True,
@@ -314,6 +484,7 @@ def api_info():
         info = info["entries"][0]
 
     return jsonify({
+        "source": "youtube",
         "title": info.get("title"),
         "uploader": info.get("uploader"),
         "duration": info.get("duration"),

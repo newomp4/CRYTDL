@@ -1,7 +1,7 @@
 # CRYTDL
 
-A tiny, self-contained YouTube downloader with a clean monochrome UI.
-Paste a link, pick MP4 or MP3, hit download.
+A tiny, self-contained YouTube + Spotify downloader with a clean monochrome
+UI. Paste a link, pick MP4 or MP3, hit download.
 
 Everything it needs (Python packages, ffmpeg, downloaded files) lives
 inside this folder. Delete the folder and nothing remains.
@@ -56,6 +56,29 @@ YouTube doesn't host MP3 files at all. It serves audio as Opus or AAC. To get
 an MP3, ffmpeg has to **re-encode** the audio at the bitrate you asked for
 (128/192/320 kbps, etc.).
 
+### How Spotify works (the honest truth)
+
+Spotify's audio streams are DRM-encrypted, so we **can't** download audio
+from Spotify itself — no Spotify downloader can. Every tool you've seen do
+this is actually doing the same trick:
+
+1. Read the Spotify URL → scrape title, artist, album, year, and cover art
+   from the public `open.spotify.com` page (no API key needed; Spotify
+   exposes all of this in `<meta property="og:..." />` tags for crawlers).
+2. Search YouTube for `"<artist> <title>"` and download the top result as MP3.
+3. Wipe the YouTube tags off the resulting file and write the Spotify ones in
+   their place — including the high-resolution Spotify cover art.
+
+So the **audio** is from YouTube, but the **labeling** is from Spotify, which
+means it shows up in your music player with the right artist, album, and
+artwork. The trade-off is that the audio is whatever YouTube has — usually
+the official music video, sometimes a topic auto-upload — and not Spotify's
+master.
+
+> **Currently supported:** single track URLs (`open.spotify.com/track/...`).
+> Album and playlist URLs aren't implemented yet; they'd need the Spotify
+> Web API to enumerate tracks.
+
 ---
 
 ## Self-contained by design
@@ -69,6 +92,7 @@ CRYTDL/
 ├── downloads/         ← downloaded videos + .history.json
 ├── static/            ← UI: index.html, style.css, app.js
 ├── app.py             ← Flask backend
+├── spotify.py         ← Spotify URL parser + metadata scraper
 ├── setup_ffmpeg.py    ← one-shot ffmpeg installer
 ├── setup.sh           ← venv + deps + ffmpeg
 ├── start.sh           ← launcher

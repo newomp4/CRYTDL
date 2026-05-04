@@ -71,12 +71,33 @@ function renderQuality() {
   sel.value = state.quality;
 }
 
+function setFormat(fmt) {
+  if (state.format === fmt) return;
+  state.format = fmt;
+  $$(".seg-btn").forEach((b) => {
+    const active = b.dataset.format === fmt;
+    b.classList.toggle("is-active", active);
+    b.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  renderQuality();
+}
+
 // ---------------------------------------------------------------------------
 // URL info preview
 // ---------------------------------------------------------------------------
 
 function isLikelyYouTube(s) {
   return /(?:youtube\.com|youtu\.be|youtube-nocookie\.com)/i.test(s);
+}
+
+function isLikelySpotify(s) {
+  return /(?:open\.spotify\.com\/(?:intl-[a-z]+\/)?(?:track|album|playlist|episode)\/|spotify:(?:track|album|playlist|episode):)/i.test(s);
+}
+
+function detectSource(s) {
+  if (isLikelySpotify(s)) return "spotify";
+  if (isLikelyYouTube(s)) return "youtube";
+  return null;
 }
 
 async function fetchInfo(url) {
@@ -112,15 +133,40 @@ function renderPreview(info) {
   }
   $("#previewThumb").src = info.thumbnail || "";
   $("#previewTitle").textContent = info.title || "";
-  const sub = [info.uploader, fmtDuration(info.duration)].filter(Boolean).join(" · ");
-  $("#previewSub").textContent = sub;
+  const subBits = [info.uploader, info.album, fmtDuration(info.duration)].filter(Boolean);
+  $("#previewSub").textContent = subBits.join(" · ");
+
+  const pill = $("#previewSource");
+  if (info.source) {
+    pill.textContent = info.source;
+    pill.hidden = false;
+  } else {
+    pill.hidden = true;
+  }
   card.hidden = false;
+}
+
+function applySourceConstraints(source) {
+  // Spotify is audio-only — force MP3 mode and lock the format toggle.
+  const notice = $("#spotifyNotice");
+  if (source === "spotify") {
+    notice.hidden = false;
+    setFormat("mp3");
+    $$(".seg-btn").forEach((b) => {
+      b.disabled = b.dataset.format !== "mp3";
+    });
+  } else {
+    notice.hidden = true;
+    $$(".seg-btn").forEach((b) => (b.disabled = false));
+  }
 }
 
 function debouncePreview() {
   clearTimeout(state.infoDebounce);
   const url = $("#urlInput").value.trim();
-  if (!isLikelyYouTube(url)) {
+  const source = detectSource(url);
+  applySourceConstraints(source);
+  if (!source) {
     $("#preview").hidden = true;
     return;
   }
@@ -137,11 +183,11 @@ function debouncePreview() {
 async function startDownload() {
   const url = $("#urlInput").value.trim();
   if (!url) {
-    toast("Paste a YouTube URL first.", true);
+    toast("Paste a YouTube or Spotify URL first.", true);
     return;
   }
-  if (!isLikelyYouTube(url)) {
-    toast("That doesn't look like a YouTube URL.", true);
+  if (!detectSource(url)) {
+    toast("That doesn't look like a YouTube or Spotify URL.", true);
     return;
   }
   const btn = $("#downloadBtn");
@@ -254,6 +300,12 @@ function renderJobs(jobs) {
     pill.className = "pill";
     pill.textContent = j.format;
     meta.appendChild(pill);
+    if (j.source && j.source !== "youtube") {
+      const sp = document.createElement("span");
+      sp.className = "pill";
+      sp.textContent = j.source;
+      meta.appendChild(sp);
+    }
     if (j.status === "downloading") {
       meta.append(
         spanText(`${j.percent.toFixed(1)}%`),
@@ -283,7 +335,9 @@ function renderJobs(jobs) {
 
 function labelForStatus(s) {
   if (s === "queued") return "Queued";
+  if (s === "searching") return "Searching…";
   if (s === "processing") return "Processing…";
+  if (s === "tagging") return "Tagging…";
   if (s === "error") return "Error";
   return s;
 }
@@ -348,8 +402,10 @@ function renderHistory(items) {
     title.textContent = it.title || it.filename;
     const meta = document.createElement("div");
     meta.className = "hi-meta";
+    const fmtBits = [it.format?.toUpperCase() || ""];
+    if (it.source && it.source !== "youtube") fmtBits.push(it.source);
     meta.append(
-      spanText(it.format?.toUpperCase() || ""),
+      spanText(fmtBits.filter(Boolean).join(" · ")),
       spanText(fmtBytes(it.size_bytes)),
       spanText(fmtAgo(it.completed_at))
     );
@@ -422,14 +478,8 @@ function bindUI() {
   // Format toggle
   $$(".seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      $$(".seg-btn").forEach((b) => {
-        b.classList.remove("is-active");
-        b.setAttribute("aria-selected", "false");
-      });
-      btn.classList.add("is-active");
-      btn.setAttribute("aria-selected", "true");
-      state.format = btn.dataset.format;
-      renderQuality();
+      if (btn.disabled) return;
+      setFormat(btn.dataset.format);
       // Subtitles only apply to MP4
       $("#optSubsWrap").style.opacity = state.format === "mp4" ? "" : "0.4";
       $("#optSubs").disabled = state.format !== "mp4";
