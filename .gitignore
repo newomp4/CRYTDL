@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment (created by setup.sh)
+.venv/
+
+# ffmpeg binary (downloaded by setup_ffmpeg.py)
+bin/
+
+# Downloaded files and history
+downloads/
+
+# OS junk
+.DS_Store
+Thumbs.db
